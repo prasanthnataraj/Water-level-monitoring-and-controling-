@@ -1,0 +1,321 @@
+//contect on : Mohan angappan,
+	//LinkedIn: https://www.linkedin.com/in/mohan-angappan-491825130
+	//Twitter:https://twitter.com/MohanAngappan
+	//GitHub:https://github.com/MohanAngappan
+
+
+#include <EEPROM.h>
+#include <Wire.h>
+//#define BLYNK_PRINT Serial
+//#include <ESP8266WiFi.h>
+//#include <BlynkSimpleEsp8266.h>
+#include <LiquidCrystal_I2C.h>
+//#include <TinyGsmClient.h>
+//#include <BlynkSimpleTinyGSM.h>
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+#include <SoftwareSerial.h>
+SoftwareSerial GSM(5, 6 ); //rx  tx
+//#define serialAT serial1
+float calibration_value = 7.0;
+int phval = 0;
+unsigned long int avgval;
+int buffer_arr[10], temp;
+
+long duration, inches;
+int set_val, percentage;
+bool state, pump;
+int temp_var, cur_pump;
+volatile int last_temp, last_pump;
+
+unsigned int estimateAvg = 250;
+unsigned int avarageValue = 0;
+unsigned int avarageCount = 0;
+unsigned int avarageResult = 0;
+
+unsigned int checkTime = 10;
+unsigned int checkTimeCount = 1;
+unsigned int hour = 0;
+unsigned int returnValue = 0;
+unsigned int secondInput = 0;
+unsigned int initialValue;
+//const int ledPin =  13;
+//const int ledPin1 =  12;
+volatile int flow_frequency1;
+volatile int flow_frequency; // Measures flow sensor pulses
+unsigned int l_hour; // Calculated litres/hour
+unsigned char flowsensor = 2; // Sensor Input
+unsigned char flowsensor1 = 3;
+unsigned long currentTime;
+unsigned long cloopTime;
+void flow () // Interrupt function
+{
+  flow_frequency++;
+  secondInput = 1;
+}
+void flow1 () // Interrupt function
+{
+  flow_frequency++;
+}
+
+char phone_no[] = "+91xxxxxxxxxx"; //Input recevier Phone number
+
+void setup()
+{
+  Serial.begin(9600);//Begin serial communication with Arduino and Arduino IDE (Serial Monitor)
+  GSM.begin(9600);   //Begin serial communication with Arduino and SIM800L
+
+  //Serial.begin(9600);
+  // Blynk.begin(auth, ssid, pass);
+  Serial.begin(9600);
+  lcd.init();
+  lcd.begin(16, 2);
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("   WEL COME TO  ");
+  lcd.setCursor(0, 1);
+  lcd.print("   OUR PROJECT  ");
+  delay(2000);
+  lcd.clear();
+
+  lcd.init();
+  lcd.print("WATER LEVEL:");
+  lcd.setCursor(0, 1);
+  lcd.print("PUMP:OFF MANUAL");
+  pinMode(flowsensor, INPUT);
+  pinMode(flowsensor1, INPUT);
+  digitalWrite(flowsensor, HIGH); // Optional Internal Pull-Up
+  attachInterrupt(0, flow, CHANGE); // Setup Interrupt
+  sei(); // Enable interrupts
+  currentTime = millis();
+  cloopTime = currentTime;
+
+  Serial.println("Initializing....");
+  initModule("AT", "OK", 1000);              //Once the handshake test is successful, it will back to OK
+  initModule("ATE1", "OK", 1000);            //this command is used for enabling echo
+  initModule("AT+CPIN?", "READY", 1000);     //this command is used to check whether SIM card is inserted in GSM Module or not
+  initModule("AT+CMGF=1", "OK", 1000);       //Configuring TEXT mode
+  Serial.println("Initialized Successfully");
+
+  sendSMS(phone_no, "System is Ready");
+
+
+  pinMode(8, OUTPUT);
+  pinMode(9, INPUT);
+  pinMode(10, INPUT_PULLUP);
+  pinMode(11, INPUT_PULLUP);
+  pinMode(13, OUTPUT);
+  //pinMode(4, INPUT);   //need to test pinMode(4, INPUT_PULLUP);
+
+  set_val = EEPROM.read(0);
+  if (set_val > 300)set_val = 300;
+  delay(2000);
+  lcd.clear();
+}
+void loop() {
+  currentTime = millis();
+  if (currentTime >= (cloopTime + 1000))
+  {
+    lcd.clear();
+    hour += (millis() / 1000) / 60 / 60;
+    cloopTime = currentTime; // Updates cloopTime
+    // Pulse frequency (Hz) = 7.5Q, Q is flow rate in L/min.
+    l_hour = (flow_frequency * 60 / 7.5); // (Pulse frequency x 60 min) / 7.5Q = flowrate in L/hour
+    flow_frequency = 0; // Reset Counter
+    Serial.print(l_hour, DEC); // Print litres/hour
+    Serial.print(" L/hour   ");
+    Serial.println(initialValue);
+    if (l_hour > 0 && initialValue > 0 && secondInput != 1) {
+      avarageValue = avarageValue + l_hour;
+      avarageCount += 1;
+      avarageResult = avarageValue / avarageCount;
+    }
+    if (secondInput == 1 && l_hour > 0) {
+      returnValue = returnValue + 1;
+    }
+    if ((millis() / 1000) > (checkTime * checkTimeCount)) {
+      checkTimeCount += 1;
+    }
+    if ((millis() / 1000) <= (checkTime * checkTimeCount) && l_hour > estimateAvg && l_hour > 0 && initialValue > 0) {
+      Serial.println("waterflow");
+      lcd.setCursor(0, 0);
+      lcd.print("Waterflow");
+      lcd.setCursor(0, 1);
+      lcd.print("Normal");
+    }
+    else {
+      if (l_hour < (initialValue - 200) && l_hour > 0 && initialValue > 0) {
+        Serial.println(" Leakage");
+        lcd.setCursor(0, 0);
+        lcd.print("WARNING...");
+        lcd.setCursor(0, 1);
+        lcd.print("WATER LEAKAGE");
+        sendSMS(phone_no, "WARNING...WATER LEAKAGE CHECK IT");
+        lcd.setCursor(0, 1);
+        lcd.print(l_hour);
+        lcd.setCursor(5, 1);
+        lcd.print("l/H");
+        lcd.setCursor(9, 1);
+        lcd.print(avarageResult);
+        pump = 0;
+      }
+
+    }
+    if (l_hour > 100 && secondInput == 1 && returnValue == 3) {
+      initialValue = l_hour;
+      detachInterrupt(0);
+      attachInterrupt(1, flow1, RISING);
+      secondInput = 2;
+    }
+  }
+  delay (1000);
+  lcd.clear();
+  water();
+  delay (1000);
+  lcd.clear();
+  ph();
+  delay (1000);
+  lcd.clear();
+
+}
+void water() {
+
+  digitalWrite(8, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(8, LOW);
+  duration = pulseIn(9, HIGH);
+  inches = microsecondsToInches(duration);
+
+  percentage = (set_val - inches) * 100 / set_val;
+
+  lcd.setCursor(0, 0);
+  if (percentage < 0)percentage = 0;
+  lcd.print("WATER LEVEL: ");
+  lcd.print(percentage);
+  lcd.print("%");
+
+  if (percentage < 30 & digitalRead(11))pump = 1;
+  if (percentage > 95)pump = 0;
+  digitalWrite(13, !pump);
+
+
+
+  lcd.setCursor(1, 1);
+  if (pump == 1) {
+    lcd.print("PUMP:ON ");
+    cur_pump = 2;
+
+    if (last_pump != cur_pump) {
+      sendSMS(phone_no, "PUMP:ON");
+    }
+    last_pump = cur_pump;
+  }
+  else if (pump == 0) {
+    lcd.print("PUMP:OFF");
+    cur_pump = 1;
+
+    if (last_pump != cur_pump) {
+      sendSMS(phone_no, "PUMP:OFF ");
+    }
+    last_pump = cur_pump;
+  }
+
+  lcd.setCursor(9, 1);
+  if (!digitalRead(11))lcd.print("MANUAL");
+  else lcd.print("AUTO");
+
+  if (!digitalRead(10) & !state & digitalRead(11)) {
+    state = 1;
+    set_val = inches;
+    EEPROM.write(0, set_val);
+  }
+
+  if (!digitalRead(10) & !state & !digitalRead(11)) {
+    state = 1;
+    pump = !pump;
+  }
+
+  if (digitalRead(10))state = 0;
+
+
+}
+void ph() {
+  for (int i = 0; i < 10; i++)
+  {
+    buffer_arr[i] = analogRead(A0);
+    delay(30);
+  }
+  for (int i = 0; i < 9; i++)
+  {
+    for (int j = i + 1; j < 10; j++)
+    {
+      if (buffer_arr[i] > buffer_arr[j])
+      {
+        temp = buffer_arr[i];
+        buffer_arr[i] = buffer_arr[j];
+        buffer_arr[j] = temp;
+      }
+    }
+  }
+  avgval = 0;
+  for (int i = 2; i < 8; i++)
+    avgval += buffer_arr[i];
+  float volt = (float)avgval * 5.0 / 1024 / 6;
+  float ph_act = -5.70 * volt + calibration_value;
+  lcd.setCursor(0, 0);
+  lcd.print("pH Val:");
+  lcd.setCursor(8, 0);
+  lcd.print(ph_act);
+  if (ph_act >= 7)
+  {
+    lcd.setCursor(0, 1);
+    lcd.print("Netural");
+    temp_var = 2;
+
+    if (last_temp != temp_var) {
+      sendSMS(phone_no, "Netural");
+    }
+    last_temp = temp_var;
+  }
+  else if (ph_act < 7)
+  {
+    lcd.setCursor(0, 1);
+    lcd.print("Acidic water");
+    temp_var = 1;
+
+    if (last_temp != temp_var) {
+      sendSMS(phone_no, "Acidic Water");
+    }
+    last_temp = temp_var;
+  }
+  delay(1000);
+}
+
+long microsecondsToInches(long microseconds) {
+  return microseconds / 74 / 2;
+}
+
+void sendSMS(char *number, char *msg) {
+  GSM.println("AT+CMGS=\"+91xxxxxxxxxxx\"\r");  //input the receiver phone number
+  delay(500);
+  GSM.println(msg); // Message contents
+  delay(500);
+  GSM.write(byte(26)); //Ctrl+Z  send message command (26 in decimal).
+  delay(5000);
+}
+
+void initModule(String cmd, char *res, int t) {
+  Serial.println(cmd);
+  GSM.println(cmd);
+  delay(100);
+  while (GSM.available() > 0) {
+    if (GSM.find(res)) {
+      Serial.println(res);
+      delay(t);
+      return;
+    } else {
+      Serial.println("Error");
+    }
+  }
+  delay(t);
+
+}
